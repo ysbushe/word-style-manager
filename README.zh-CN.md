@@ -2,7 +2,7 @@
 [English](README.md) | 简体中文
 </div>
 
-# 工程文档样式管理工具 / Engineering Word Toolkit
+# 工程文档样式管理工具 / Engineering Word Toolkit v0.1.0
 
 面向非专业用户的文档样式管理工具，降低学习门槛，无需编程经验或 Word 高级排版知识。
 

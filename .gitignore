@@ -22,3 +22,6 @@ Thumbs.db
 
 # Config (local user settings)
 cleaner_config.json
+
+# Internal docs
+internal-docs/

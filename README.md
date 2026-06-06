@@ -2,7 +2,7 @@
 English | [简体中文](README.zh-CN.md)
 </div>
 
-# Engineering Word Toolkit
+# Engineering Word Toolkit v0.1.0
 
 A user-friendly toolkit for document style management, template governance, and document standardization. Designed for non-technical users to quickly organize and standardize their documents.
 
