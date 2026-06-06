@@ -1,0 +1,17 @@
+[project]
+name = "word-style-manager"
+version = "0.1.0"
+description = "工程文档自动化工具 — Word 样式清理、模板提取、批量导入与多级编号管理"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "python-docx>=1.1.0",
+    "lxml>=5.1.0",
+    "ttkbootstrap>=1.10.0",
+    "tkinterdnd2>=0.4.0",
+    "pywin32>=306",
+]
+
+[project.scripts]
+ewt = "src.ewt.ui.app:main"
