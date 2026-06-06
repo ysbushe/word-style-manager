@@ -1,0 +1,5 @@
+python-docx>=1.1.0
+lxml>=5.1.0
+ttkbootstrap>=1.10.0
+tkinterdnd2>=0.4.0
+pywin32>=306
