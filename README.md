@@ -24,7 +24,17 @@
 
 ## 截图
 
-> 待补充 — 将在此处添加主界面和功能截图
+### 样式清理
+![样式清理](docs/screenshots/clean-style.png)
+
+### 提取模板
+![提取模板](docs/screenshots/export-template.png)
+
+### 导入样式
+![导入样式](docs/screenshots/import-style.png)
+
+### 模板库
+![模板库](docs/screenshots/template-library.png)
 
 ## 安装
 
