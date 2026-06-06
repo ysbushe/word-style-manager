@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 # Engineering Word Toolkit
 
-A user-friendly document style management tool designed for people without professional Word formatting skills, software development experience, or AI tool knowledge.
+A user-friendly toolkit for document style management, template governance, and document standardization. Designed for non-technical users to quickly organize and standardize their documents.
 
 ## Why this project?
 
