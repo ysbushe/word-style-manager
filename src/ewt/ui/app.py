@@ -288,6 +288,15 @@ class StyleManagerApp(TkinterDnD.Tk):
         self.clean_list.delete(0, END)
         self.clean_tree.delete(*self.clean_tree.get_children())
 
+    def add_import_targets(self):
+        files = filedialog.askopenfilenames(filetypes=[("Word 文件", "*.doc *.docx")])
+        self.import_targets.extend(files)
+        self.refresh_listbox(self.import_list, self.import_targets)
+
+    def clear_import_targets(self):
+        self.import_targets = []
+        self.import_list.delete(0, END)
+
     def preview_clean_styles(self):
         if not self.clean_files:
             messagebox.showinfo(APP_NAME, "请先添加需要分析的 Word 文件。")
