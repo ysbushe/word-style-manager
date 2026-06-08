@@ -8,7 +8,13 @@ from lxml import etree
 from src.ewt.config import NS, W_NS, STYLE_REF_TAGS, STYLE_DEP_TAGS
 from src.ewt.utils.helpers import _w_val, _style_id, _style_name, _is_builtin_style, _style_type, _style_dict, _iter_word_xml_names
 from src.ewt.utils.word_io import prepare_document, _read_xml, _xml_bytes, _copy_docx_with_replacements
-from src.ewt.core.numbering import _used_numbering_ids, _clean_unused_numbering_root, _style_numbering, _numbering_inventory
+from src.ewt.core.numbering import (
+    _used_numbering_ids,
+    _clean_unused_numbering_root,
+    _deduplicate_numbering_root,
+    _style_numbering,
+    _numbering_inventory,
+)
 
 
 def _used_style_ids(docx_path):
@@ -62,6 +68,34 @@ def _clean_unused_styles_root(styles_root, used_ids):
             styles_root.remove(style)
             removed += 1
     return removed
+
+
+def _repair_broken_style_refs(styles_root, numbering_root=None):
+    """Remove style dependencies and numbering links that point to missing definitions."""
+    if styles_root is None:
+        return 0
+    valid_styles = set(_style_dict(styles_root))
+    valid_nums = set()
+    if numbering_root is not None:
+        valid_nums = {
+            node.get(f"{{{W_NS}}}numId")
+            for node in numbering_root.findall("w:num", NS)
+            if node.get(f"{{{W_NS}}}numId")
+        }
+    repaired = 0
+    for style in styles_root.findall("w:style", NS):
+        for tag in ("basedOn", "next", "link"):
+            node = style.find(f"w:{tag}", NS)
+            if node is not None and _w_val(node) not in valid_styles:
+                style.remove(node)
+                repaired += 1
+        num_pr = style.find("w:pPr/w:numPr", NS)
+        if num_pr is not None:
+            num_id = num_pr.find("w:numId", NS)
+            if num_id is not None and valid_nums and _w_val(num_id) not in valid_nums:
+                num_pr.getparent().remove(num_pr)
+                repaired += 1
+    return repaired
 
 
 def _selected_style_ids(styles_root, selected_ids=None, include_dependencies=True):
@@ -218,11 +252,13 @@ def process_styles(input_path, output_path, styles_to_remove=None, styles_to_hid
         removed_count = _clean_unused_styles_root(styles_root, used)
         used_nums = _used_numbering_ids(docx_path, styles_root)
         removed_nums, removed_abs = _clean_unused_numbering_root(numbering_root, used_nums)
+        deduplicated = _deduplicate_numbering_root(numbering_root)
+        repaired = _repair_broken_style_refs(styles_root, numbering_root)
         replacements = {"word/styles.xml": _xml_bytes(styles_root)}
         if numbering_root is not None:
             replacements["word/numbering.xml"] = _xml_bytes(numbering_root)
         _copy_docx_with_replacements(docx_path, output_path, replacements)
-        return True, removed_count, removed_nums + removed_abs
+        return True, removed_count + repaired, removed_nums + removed_abs + deduplicated
     except Exception as e:
         return False, str(e), 0
     finally:

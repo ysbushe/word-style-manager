@@ -1,6 +1,6 @@
 [project]
 name = "word-style-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "工程文档自动化工具 — Word 样式清理、模板提取、批量导入与多级编号管理"
 readme = "README.md"
 license = {text = "MIT"}

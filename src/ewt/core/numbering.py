@@ -1,6 +1,7 @@
 """编号 / 多级列表处理引擎"""
 
 from copy import deepcopy
+from lxml import etree
 
 from src.ewt.config import NS, W_NS, NUM_REF_TAG
 from src.ewt.utils.helpers import _w_val, _find_val, _style_dict
@@ -63,6 +64,33 @@ def _clean_unused_numbering_root(numbering_root, used_nums):
             numbering_root.remove(abstract)
             removed_abs += 1
     return removed_nums, removed_abs
+
+
+def _deduplicate_numbering_root(numbering_root):
+    """Merge duplicate abstract numbering definitions and remap num references."""
+    if numbering_root is None:
+        return 0
+    seen = {}
+    remap = {}
+    removed = 0
+    for abstract in list(numbering_root.findall("w:abstractNum", NS)):
+        abs_id = abstract.get(f"{{{W_NS}}}abstractNumId", "")
+        clone = deepcopy(abstract)
+        clone.attrib.pop(f"{{{W_NS}}}abstractNumId", None)
+        signature = etree.tostring(clone, encoding="UTF-8")
+        if signature in seen:
+            remap[abs_id] = seen[signature]
+            numbering_root.remove(abstract)
+            removed += 1
+        else:
+            seen[signature] = abs_id
+    for num in numbering_root.findall("w:num", NS):
+        ref = num.find("w:abstractNumId", NS)
+        if ref is not None:
+            old = _w_val(ref)
+            if old in remap:
+                ref.set(f"{{{W_NS}}}val", remap[old])
+    return removed
 
 
 def _style_numbering(style_element):
