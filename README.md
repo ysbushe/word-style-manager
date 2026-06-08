@@ -1,6 +1,4 @@
-<div align='right'>
-English | [简体中文](README.zh-CN.md)
-</div>
+[简体中文](README.zh-CN.md) | English
 
 # Engineering Word Toolkit v0.1.0
 

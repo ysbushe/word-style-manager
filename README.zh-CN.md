@@ -1,6 +1,4 @@
-<div align='right'>
 [English](README.md) | 简体中文
-</div>
 
 # 工程文档样式管理工具 / Engineering Word Toolkit v0.1.0
 
