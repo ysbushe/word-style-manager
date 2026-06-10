@@ -1,18 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = []
-tmp_ret = collect_all('tkinterdnd2')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('ttkbootstrap')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-# win32com 用于 .doc → .docx 转换
-tmp_ret = collect_all('win32com')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-hiddenimports += ['win32com.client', 'win32com.gen_py']
+hiddenimports = ['win32com.client']
 datas += [('templates', 'templates')]
+datas += [('使用说明.md', '.')]
+datas += [('LICENSE', '.')]
+datas += [('THIRD_PARTY_NOTICES.md', '.')]
 
 
 a = Analysis(
@@ -24,7 +18,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['numpy'],
     noarchive=False,
     optimize=0,
 )
@@ -46,6 +40,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    contents_directory='.',
 )
 coll = COLLECT(
     exe,

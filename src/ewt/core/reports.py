@@ -6,6 +6,8 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
+from src.ewt.utils.safe_io import atomic_write_text
+
 
 def generate_html_report(report_path, title, rows, summary=None):
     report_path = Path(report_path)
@@ -46,5 +48,5 @@ tr:nth-child(even){{background:#f8fafc}}td:first-child{{font-weight:600;width:19
 <div class="card"><table><tbody>{table_rows}</tbody></table></div>
 <div class="foot">Word 样式管理器</div>
 </div></body></html>"""
-    report_path.write_text(html, encoding="utf-8")
+    atomic_write_text(report_path, html, encoding="utf-8")
     return str(report_path)

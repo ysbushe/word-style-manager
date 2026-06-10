@@ -45,22 +45,43 @@ def _used_numbering_ids(docx_path, styles_root=None):
     return used_nums
 
 
-def _clean_unused_numbering_root(numbering_root, used_nums):
-    """清理 numbering.xml 中未被使用的 num 和 abstractNum"""
+def _clean_unused_numbering_root(
+    numbering_root,
+    used_nums,
+    remove_single_level=True,
+    remove_multilevel=True,
+):
+    """清理未使用编号，并允许分别控制单级编号和多级列表。"""
     if numbering_root is None:
         return 0, 0
     num_to_abs, _ = _numbering_maps(numbering_root)
-    used_abs = {num_to_abs[num_id] for num_id in used_nums if num_id in num_to_abs}
+    abstract_by_id = {
+        node.get(f"{{{W_NS}}}abstractNumId"): node
+        for node in numbering_root.findall("w:abstractNum", NS)
+    }
+
+    def should_remove(abstract_id):
+        abstract = abstract_by_id.get(abstract_id)
+        level_count = len(abstract.findall("w:lvl", NS)) if abstract is not None else 1
+        return remove_multilevel if level_count > 1 else remove_single_level
+
     removed_nums = 0
     removed_abs = 0
     for num in list(numbering_root.findall("w:num", NS)):
         num_id = num.get(f"{{{W_NS}}}numId")
-        if num_id and num_id not in used_nums:
+        abstract_id = num_to_abs.get(num_id)
+        if num_id and num_id not in used_nums and should_remove(abstract_id):
             numbering_root.remove(num)
             removed_nums += 1
+
+    remaining_abs = {
+        _w_val(ref)
+        for ref in numbering_root.findall("w:num/w:abstractNumId", NS)
+        if _w_val(ref)
+    }
     for abstract in list(numbering_root.findall("w:abstractNum", NS)):
         abs_id = abstract.get(f"{{{W_NS}}}abstractNumId")
-        if abs_id and abs_id not in used_abs:
+        if abs_id and abs_id not in remaining_abs and should_remove(abs_id):
             numbering_root.remove(abstract)
             removed_abs += 1
     return removed_nums, removed_abs

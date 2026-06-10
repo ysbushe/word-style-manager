@@ -18,6 +18,9 @@ def _style_name(style_element):
 
 
 def _is_builtin_style(style_element):
+    custom = style_element.get(f"{{{W_NS}}}customStyle", "").lower()
+    if custom in {"1", "true", "on"}:
+        return False
     return style_element.find("w:customStyle", NS) is None
 
 

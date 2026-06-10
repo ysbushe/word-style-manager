@@ -15,6 +15,7 @@ from lxml import etree
 from src.ewt.config import DEFAULT_NUMBERING_PRESETS, NS, W_NS
 from src.ewt.core.style_engine import inspect_document
 from src.ewt.utils.helpers import _style_dict, _style_id
+from src.ewt.utils.safe_io import atomic_write_json, preserve_corrupt_file
 from src.ewt.utils.word_io import _copy_docx_with_replacements, _read_xml, _xml_bytes
 
 
@@ -78,6 +79,9 @@ def _apply_style_update(style, values):
         value = values.get(key, "")
         if value != "":
             spacing.set(_w(key), str(value))
+    line_rule = values.get("line_rule", "").strip()
+    if line_rule:
+        spacing.set(_w("lineRule"), line_rule)
     ind = _child(ppr, "ind")
     for key in ("left", "hanging"):
         value = values.get(key, "")
@@ -186,9 +190,7 @@ def save_template_edits(
     if numbering_root is not None:
         replacements["word/numbering.xml"] = _xml_bytes(numbering_root)
     if overwrite:
-        temp = source.with_suffix(source.suffix + ".tmp")
-        _copy_docx_with_replacements(source, temp, replacements, as_template=source.suffix.lower() == ".dotx")
-        os.replace(temp, source)
+        _copy_docx_with_replacements(source, source, replacements, as_template=source.suffix.lower() == ".dotx")
     else:
         _copy_docx_with_replacements(source, output, replacements, as_template=source.suffix.lower() == ".dotx")
     return {"success": True, "output": str(output), "num_id": num_id}
@@ -201,6 +203,7 @@ def load_numbering_presets(library_dir):
         try:
             custom = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            preserve_corrupt_file(path)
             custom = []
     names = set()
     merged = []
@@ -218,24 +221,28 @@ def save_custom_preset(library_dir, preset):
         try:
             items = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            preserve_corrupt_file(path)
             items = []
     items = [item for item in items if item.get("name") != preset.get("name")]
     items.append(preset)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(path, items)
     return str(path)
 
 
-def clean_old_template_versions(library_dir, base_name, keep=3):
+def clean_old_template_versions(library_dir, base_name, keep=3, dry_run=False):
     library = Path(library_dir)
-    pattern = re.compile(rf"^{re.escape(base_name)}(?:_v\d{{8}}_\d{{6}})?\.(dotx|docx)$", re.I)
+    pattern = re.compile(rf"^{re.escape(base_name)}_v\d{{8}}_\d{{6}}\.(dotx|docx)$", re.I)
     matches = sorted(
         [path for path in library.iterdir() if path.is_file() and pattern.match(path.name)],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+    selected = matches[max(keep, 1):]
+    if dry_run:
+        return [str(path) for path in selected]
     removed = []
-    for path in matches[max(keep, 0):]:
+    for path in selected:
         path.unlink()
         removed.append(str(path))
     return removed

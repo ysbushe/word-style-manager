@@ -7,6 +7,8 @@ from tkinter import LEFT, RIGHT, BOTH, X, W
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 
+from src.ewt.ui.theme import COLORS, configure_office_theme
+
 
 def open_folder(path, select_file=False):
     """在资源管理器中打开目录或选中文件"""
@@ -31,18 +33,21 @@ class FinishDialog(tb.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.paths = paths or []
+        configure_office_theme(getattr(parent, "style", None) or tb.Style())
+        self.configure(background=COLORS["background"])
 
-        body = tb.Frame(self, padding=22)
+        body = tb.Frame(self, padding=24, style="Office.TFrame")
         body.pack(fill=BOTH, expand=True)
-        tb.Label(body, text=title, font=("Microsoft YaHei UI", 16, "bold")).pack(anchor=W)
-        tb.Label(body, text=message, wraplength=400, justify=LEFT, bootstyle=SECONDARY).pack(anchor=W, pady=(12, 18))
+        tb.Label(body, text="任务结果", style="Eyebrow.TLabel").pack(anchor=W)
+        tb.Label(body, text=title, style="PageTitle.TLabel").pack(anchor=W, pady=(2, 0))
+        tb.Label(body, text=message, wraplength=400, justify=LEFT, style="PageHint.TLabel").pack(anchor=W, pady=(12, 18))
 
-        btns = tb.Frame(body)
+        btns = tb.Frame(body, style="Office.TFrame")
         btns.pack(fill=X, side=BOTTOM)
         if self.paths:
-            tb.Button(btns, text="打开第一个结果", bootstyle=SUCCESS, command=self.open_first).pack(side=LEFT)
-            tb.Button(btns, text="打开所在位置", bootstyle=SECONDARY, command=self.open_location).pack(side=LEFT, padx=8)
-        tb.Button(btns, text="关闭", bootstyle=LIGHT, command=self.destroy).pack(side=RIGHT)
+            tb.Button(btns, text="打开第一个结果", style="Primary.TButton", command=self.open_first).pack(side=LEFT)
+            tb.Button(btns, text="打开所在位置", style="Secondary.TButton", command=self.open_location).pack(side=LEFT, padx=8)
+        tb.Button(btns, text="关闭", style="Ghost.TButton", command=self.destroy).pack(side=RIGHT)
 
         self.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2

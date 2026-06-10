@@ -20,8 +20,10 @@ from src.ewt.core.style_engine import (
     _used_style_ids,
 )
 from src.ewt.utils.helpers import _style_dict, _style_id, _w_val
+from src.ewt.utils.safe_io import atomic_write_json, preserve_corrupt_file
 from src.ewt.utils.word_io import (
     _copy_docx_with_replacements,
+    _copy_lightweight_template,
     _empty_document_xml,
     _read_xml,
     _xml_bytes,
@@ -48,65 +50,147 @@ def _update_template_index(library_dir, name, source_path, template_path):
     try:
         items = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
     except Exception:
+        preserve_corrupt_file(index_path)
         items = []
     record = {
         "name": name,
         "source": str(source_path),
-        "path": str(template_path),
+        "path": Path(template_path).name,
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "version_key": Path(template_path).stem,
     }
-    items = [item for item in items if item.get("path") != str(template_path)]
+    template_name = Path(template_path).name
+    items = [item for item in items if Path(item.get("path", "")).name != template_name]
     items.append(record)
-    index_path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(index_path, items)
     return record
 
 
 def list_template_library(library_dir):
+    """Return existing templates and repair stale or non-portable index records."""
     library_dir = Path(library_dir)
+    library_dir.mkdir(parents=True, exist_ok=True)
     index_path = library_dir / "template_index.json"
-    items = []
+    indexed_items = []
     if index_path.exists():
         try:
-            items = json.loads(index_path.read_text(encoding="utf-8"))
+            indexed_items = json.loads(index_path.read_text(encoding="utf-8"))
         except Exception:
-            items = []
-    known = {str(Path(item.get("path", ""))) for item in items}
+            preserve_corrupt_file(index_path)
+            indexed_items = []
+
+    items = []
+    known_names = set()
+    index_changed = False
+    for item in indexed_items:
+        stored_path = Path(item.get("path", ""))
+        candidate = stored_path if stored_path.is_absolute() else library_dir / stored_path
+        if not candidate.exists():
+            candidate = library_dir / stored_path.name
+        if not candidate.is_file() or candidate.suffix.lower() != ".dotx":
+            index_changed = True
+            continue
+        resolved = candidate.resolve()
+        if resolved.parent != library_dir.resolve():
+            index_changed = True
+            continue
+        normalized = dict(item)
+        normalized["path"] = str(resolved)
+        items.append(normalized)
+        known_names.add(resolved.name.casefold())
+        if item.get("path") != resolved.name:
+            index_changed = True
+
     for file in library_dir.glob("*.dotx"):
-        if str(file) not in known:
+        if file.name.casefold() not in known_names:
             items.append(
                 {
                     "name": file.stem,
                     "source": "",
-                    "path": str(file),
+                    "path": str(file.resolve()),
                     "created_at": datetime.fromtimestamp(file.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                     "version_key": file.stem,
                 }
             )
+            known_names.add(file.name.casefold())
+            index_changed = True
+
     items.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    portable_items = [
+        {
+            **item,
+            "path": Path(item["path"]).name,
+        }
+        for item in items
+    ]
+    if index_changed or portable_items != indexed_items:
+        atomic_write_json(index_path, portable_items)
     return items
 
 
-def make_clean_style_carrier(source_path, output_path, as_template=False, selected_styles=None, include_dependencies=True):
+def delete_template_from_library(library_dir, template_path):
+    """Delete one library-owned .dotx file and remove its index record."""
+    library_dir = Path(library_dir).resolve()
+    template_path = Path(template_path).resolve()
+    if template_path.parent != library_dir or template_path.suffix.lower() != ".dotx":
+        raise ValueError("只能删除模板库目录中的 .dotx 文件。")
+    if not template_path.is_file():
+        raise FileNotFoundError(f"模板文件不存在：{template_path}")
+
+    template_path.unlink()
+    index_path = library_dir / "template_index.json"
+    if index_path.exists():
+        try:
+            items = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            preserve_corrupt_file(index_path)
+            items = []
+        remaining = [
+            item
+            for item in items
+            if Path(item.get("path", "")).name.casefold() != template_path.name.casefold()
+        ]
+        atomic_write_json(index_path, remaining)
+    return str(template_path)
+
+
+def make_clean_style_carrier(
+    source_path,
+    output_path,
+    as_template=False,
+    selected_styles=None,
+    include_dependencies=True,
+    clean_unused=True,
+):
     docx_path, is_temp = prepare_document(source_path)
     try:
-        used = _used_style_ids(docx_path)
+        used = _used_style_ids(docx_path) if clean_unused else set()
         with zipfile.ZipFile(docx_path, "r") as zf:
             styles_root = _read_xml(zf, "word/styles.xml")
             numbering_root = _read_xml(zf, "word/numbering.xml")
             document_root = _read_xml(zf, "word/document.xml")
         selected_for_clean = set(selected_styles or [])
-        removed_styles = _clean_unused_styles_root(styles_root, used | selected_for_clean)
+        removed_styles = (
+            _clean_unused_styles_root(styles_root, used | selected_for_clean)
+            if clean_unused
+            else 0
+        )
         filtered, auto_added = _filter_styles_root(styles_root, selected_styles, include_dependencies)
-        used_nums = _used_numbering_ids(docx_path, styles_root)
-        removed_nums, removed_abs = _clean_unused_numbering_root(numbering_root, used_nums)
+        if clean_unused:
+            used_nums = _used_numbering_ids(docx_path, styles_root)
+            removed_nums, removed_abs = _clean_unused_numbering_root(numbering_root, used_nums)
+        else:
+            removed_nums, removed_abs = 0, 0
         replacements = {
             "word/styles.xml": _xml_bytes(styles_root),
             "word/document.xml": _xml_bytes(_empty_document_xml(document_root)),
         }
         if numbering_root is not None:
             replacements["word/numbering.xml"] = _xml_bytes(numbering_root)
-        _copy_docx_with_replacements(docx_path, output_path, replacements, as_template=as_template)
+        if as_template:
+            _copy_lightweight_template(docx_path, output_path, replacements)
+        else:
+            _copy_docx_with_replacements(docx_path, output_path, replacements)
         return {
             "success": True,
             "output": output_path,
@@ -133,6 +217,7 @@ def export_style_template(
     library_dir=None,
     selected_styles=None,
     include_dependencies=True,
+    clean_unused=True,
 ):
     formats = formats or ["dotx", "docx", "library"]
     output_dir = Path(output_dir)
@@ -152,6 +237,7 @@ def export_style_template(
             as_template=as_template,
             selected_styles=selected_styles,
             include_dependencies=include_dependencies,
+            clean_unused=clean_unused,
         )
 
     if "dotx" in formats:
@@ -177,9 +263,20 @@ def export_style_template(
     if "library" in formats:
         lib_dir = Path(library_dir or output_dir / "templates")
         lib_dir.mkdir(parents=True, exist_ok=True)
-        result = run_one(_unique_path(lib_dir / f"{safe_name}.dotx"), True)
-        if not result["success"]:
-            return result
+        existing_dotx = outputs.get("dotx")
+        if existing_dotx and Path(existing_dotx).parent.resolve() == lib_dir.resolve():
+            result = {
+                "success": True,
+                "output": existing_dotx,
+                "removed_unused": removed_unused,
+                "removed_numbering": removed_numbering,
+                "filtered": filtered,
+                "auto_added": auto_added,
+            }
+        else:
+            result = run_one(_unique_path(lib_dir / f"{safe_name}.dotx"), True)
+            if not result["success"]:
+                return result
         outputs["library"] = result["output"]
         _update_template_index(lib_dir, safe_name, source_path, result["output"])
         removed_unused = result.get("removed_unused", removed_unused)
@@ -369,13 +466,15 @@ def save_task_scheme(library_dir, name, data):
     try:
         items = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
     except Exception:
+        preserve_corrupt_file(path)
         items = []
     data = dict(data)
     data["name"] = name
     data["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     items = [item for item in items if item.get("name") != name]
     items.append(data)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, items)
     return str(path)
 
 
@@ -386,4 +485,5 @@ def list_task_schemes(library_dir):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        preserve_corrupt_file(path)
         return []

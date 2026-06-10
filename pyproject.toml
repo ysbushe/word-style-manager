@@ -1,7 +1,7 @@
 [project]
 name = "word-style-manager"
-version = "0.2.0"
-description = "工程文档自动化工具 — Word 样式清理、模板提取、批量导入与多级编号管理"
+version = "0.3.0"
+description = "Word/WPS 样式清理、模板提取与模板库管理工具"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

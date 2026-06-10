@@ -25,3 +25,20 @@ cleaner_config.json
 
 # Internal docs
 internal-docs/
+
+# Local AI workspace and backups
+.agents/
+README.backup.md
+AGENTS.md
+CHANGELOG_FOR_CODEX.md
+DEBUG_ERROR_TEMPLATE.md
+DEBUG_GUIDE_FOR_NON_DEVELOPER.md
+DESIGN_SYSTEM.md
+PROJECT_AUDIT.md
+PROMPTS_FOR_CODEX.md
+STYLE_CLEANUP_AUDIT.md
+UI_REVIEW_CHECKLIST.md
+USER_GUIDE_FOR_NON_DEVELOPER.md
+
+# Release archives are attached to GitHub Releases, not committed
+*.zip

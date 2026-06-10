@@ -79,9 +79,9 @@ DEFAULT_NUMBERING_PRESETS = [
         ],
     },
     {
-        "name": "Article 1 / 1.1 / 1.1.1",
+        "name": "第 1 条 / 1.1 / 1.1.1",
         "levels": [
-            {"format": "Article %1", "numFmt": "decimal", "suffix": "space"},
+            {"format": "第%1条", "numFmt": "decimal", "suffix": "space"},
             {"format": "%1.%2", "numFmt": "decimal", "suffix": "space"},
             {"format": "%1.%2.%3", "numFmt": "decimal", "suffix": "space"},
             {"format": "%1.%2.%3.%4", "numFmt": "decimal", "suffix": "space"},
@@ -90,9 +90,10 @@ DEFAULT_NUMBERING_PRESETS = [
 ]
 
 APP_NAME = "Word 样式管理器"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 GITHUB_REPOSITORY = "ysbushe/word-style-manager"
 GITHUB_URL = f"https://github.com/{GITHUB_REPOSITORY}"
 GITHUB_RELEASES_URL = f"{GITHUB_URL}/releases"
 CONFIG_FILE = "cleaner_config.json"
 TEMPLATE_DIR = "templates"
+USER_GUIDE_FILE = "使用说明.md"
