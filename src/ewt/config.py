@@ -90,7 +90,7 @@ DEFAULT_NUMBERING_PRESETS = [
 ]
 
 APP_NAME = "Word 样式管理器"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 GITHUB_REPOSITORY = "ysbushe/word-style-manager"
 GITHUB_URL = f"https://github.com/{GITHUB_REPOSITORY}"
 GITHUB_RELEASES_URL = f"{GITHUB_URL}/releases"

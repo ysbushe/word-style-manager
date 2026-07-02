@@ -34,7 +34,7 @@ from src.ewt.core.style_engine import (
     inspect_document,
     process_styles,
 )
-from src.ewt.ui.app import merge_document_paths
+from src.ewt.ui.app import collect_converter_paths, merge_converter_paths, merge_document_paths
 from src.ewt.ui.template_editor import (
     INDENT_CHOICES,
     SIZE_CHOICES,
@@ -443,6 +443,31 @@ class FeatureTest(unittest.TestCase):
         second = str(self.root / "second.doc")
         result = merge_document_paths([first], [duplicate, second], ["not-a-document.dotx"])
         self.assertEqual(result, [first, second])
+
+    def test_converter_paths_collect_legacy_files_from_folders(self):
+        folder = self.root / "旧文件"
+        nested = folder / "子目录"
+        nested.mkdir(parents=True)
+        doc = folder / "报告.doc"
+        xls = nested / "台账.xls"
+        ignored = nested / "新版.docx"
+        doc.write_text("doc", encoding="utf-8")
+        xls.write_text("xls", encoding="utf-8")
+        ignored.write_text("docx", encoding="utf-8")
+
+        files, ignored_count = collect_converter_paths([folder])
+
+        self.assertEqual(set(map(Path, files)), {doc, xls})
+        self.assertEqual(ignored_count, 1)
+
+    def test_converter_paths_are_deduplicated_and_filtered(self):
+        doc = str(self.root / "报告.doc")
+        duplicate = str(self.root / "." / "报告.doc")
+        xlsx = str(self.root / "新版.xlsx")
+
+        result = merge_converter_paths([doc], [duplicate, xlsx])
+
+        self.assertEqual(result, [doc])
 
     def test_inspected_styles_put_unused_first_then_group_by_type(self):
         info = inspect_document(str(self.source))

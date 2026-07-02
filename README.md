@@ -1,6 +1,6 @@
 [简体中文](README.zh-CN.md) | [English](README.md)
 
-# Word Style Manager v0.3.0
+# Word Style Manager v0.4.0
 
 A user-friendly toolkit for document style management, template governance, and document standardization. Designed for non-technical users to quickly organize and standardize their documents.
 
@@ -31,15 +31,14 @@ Engineering Word Toolkit helps users standardize, organize, and maintain documen
 
 No programming knowledge required.
 
-## What's New in v0.3.0
+## What's New in v0.4.0
 
-- Redesigned office-style interface with larger style lists and layout previews
-- Safe and deep cleaning modes for unused styles, numbering, and multilevel lists
-- Post-clean validation of the document package, XML, style references, and numbering references
-- Template editor with familiar units, color previews, live layout preview, undo, and direct save
-- Template library with full names, timestamps, editing, and deletion
-- Default template library moved to `Documents\模板库`, independent of the portable application folder
-- Safer portable updates with size and ZIP validation, path protection, backup, and rollback
+- New **Format Conversion** workspace for batch `.doc` to `.docx` and `.xls` to `.xlsx` conversion
+- Choose Microsoft Office or WPS as the conversion engine, with Office used by default
+- Detect unavailable engines before conversion and guide users to an available option
+- Add legacy files by file picker, folder scan, or drag and drop
+- Automatically rename outputs on name conflicts and keep source files unchanged
+- Continue after per-file failures and show a clear success/failure summary
 
 ## Features
 - Clean unused styles, bullets, numbering, and multilevel lists
@@ -50,6 +49,9 @@ No programming knowledge required.
 - Auto-include dependencies required by selected exported styles
 - Property and sample-layout previews on the cleaning and template-library pages
 - Chinese-localized template editor with Word/WPS-style units, live preview, undo, and direct style saving
+- Batch-convert legacy `.doc` and `.xls` files to `.docx` and `.xlsx`
+- Choose Microsoft Office or WPS for conversion, with smart availability checks
+- Drag files or folders into the conversion page, with recursive folder scanning
 - Folder batch processing and repeatable workflows
 - Configurable template library and output directories
 - In-app GitHub link, user guide, and manual update checks
@@ -84,6 +86,17 @@ Edit typography, spacing, indentation, and color with a live layout preview.
 Review, edit, and delete saved templates with complete names and timestamps.
 
 ![Template Library](docs/screenshots/template-library.png)
+
+### Format Conversion
+Convert legacy `.doc` and `.xls` files to modern `.docx` and `.xlsx` files.
+
+Older binary formats such as `.doc` and `.xls` are less consistent for automation tools,
+scripts, and AI agents to read directly. They often require extra conversion steps, and
+content or formatting extraction can be incomplete or unstable. The newer `.docx` and
+`.xlsx` formats are based on the open OOXML standard and are structured package files,
+which makes them easier for related tools to read more reliably and completely. This
+feature helps users convert existing legacy files in batches before using them in agent
+or automation workflows.
 
 ## Installation
 ```bash
@@ -120,6 +133,7 @@ python main.py
 │   │   ├── numbering.py    # Numbering / multi-level lists
 │   │   ├── templates.py    # Template export and library management
 │   │   ├── editor.py       # Template style editing
+│   │   ├── converter.py    # Legacy Office format conversion
 │   │   └── reports.py      # HTML reports
 │   ├── ui/                 # GUI
 │   │   ├── app.py          # Main window
@@ -139,7 +153,7 @@ python main.py
 - Python 3.10+
 - python-docx, lxml — OOXML processing
 - ttkbootstrap, tkinterdnd2 — GUI
-- pywin32 — .doc to .docx conversion (requires Microsoft Word)
+- pywin32 — .doc/.xls conversion through Microsoft Office or WPS
 
 ## User Guide
 

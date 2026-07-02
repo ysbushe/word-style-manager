@@ -34,7 +34,7 @@ class TestConfig(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         with (root / "pyproject.toml").open("rb") as handle:
             project_version = tomllib.load(handle)["project"]["version"]
-        self.assertEqual(APP_VERSION, "0.3.0")
+        self.assertEqual(APP_VERSION, "0.4.0")
         self.assertEqual(project_version, APP_VERSION)
 
 

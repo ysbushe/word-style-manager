@@ -24,6 +24,7 @@ from src.ewt.config import (
     GITHUB_URL,
     USER_GUIDE_FILE,
 )
+from src.ewt.core import converter
 from src.ewt.core.updater import (
     check_for_updates,
     cleanup_download,
@@ -40,10 +41,13 @@ from src.ewt.core.templates import (
 )
 from src.ewt.ui.dialogs import FinishDialog, open_folder
 from src.ewt.ui.template_editor import TemplateEditor
-from src.ewt.ui.theme import COLORS, configure_listbox, configure_office_theme
+from src.ewt.ui.theme import COLORS, configure_listbox, configure_office_theme, configure_text
 from src.ewt.ui.widgets import PathRow, StylePreviewPanel
 from src.ewt.utils.paths import config_path, resolve_template_library_dir
 from src.ewt.utils.safe_io import atomic_write_json, preserve_corrupt_file
+
+
+CONVERTER_EXTENSIONS = {".doc", ".xls"}
 
 
 def app_dir():
@@ -68,6 +72,47 @@ def merge_document_paths(*groups):
                 seen.add(key)
                 merged.append(value)
     return merged
+
+
+def merge_converter_paths(*groups):
+    """Merge legacy Office paths while preserving order and removing duplicates."""
+    merged = []
+    seen = set()
+    for group in groups:
+        if isinstance(group, (str, Path)):
+            group = [group]
+        for path in group or []:
+            value = str(path).strip()
+            if not value or Path(value).suffix.lower() not in CONVERTER_EXTENSIONS:
+                continue
+            key = os.path.normcase(os.path.abspath(value))
+            if key not in seen:
+                seen.add(key)
+                merged.append(value)
+    return merged
+
+
+def collect_converter_paths(entries):
+    """Collect .doc/.xls files from files or folders and count ignored entries."""
+    found = []
+    ignored = 0
+    for entry in entries or []:
+        path = Path(str(entry).strip())
+        if not str(path):
+            continue
+        if path.is_dir():
+            for child in sorted(path.rglob("*")):
+                if not child.is_file():
+                    continue
+                if child.suffix.lower() in CONVERTER_EXTENSIONS:
+                    found.append(str(child))
+                else:
+                    ignored += 1
+        elif path.is_file() and path.suffix.lower() in CONVERTER_EXTENSIONS:
+            found.append(str(path))
+        else:
+            ignored += 1
+    return found, ignored
 
 
 class StyleManagerApp(TkinterDnD.Tk):
@@ -96,6 +141,7 @@ class StyleManagerApp(TkinterDnD.Tk):
         self.document_files = []
         self.clean_files = self.document_files
         self.import_targets = self.document_files
+        self.converter_files = []
         self.result_paths = []
         self.report_paths = []
         self.preview_cache = {}
@@ -105,12 +151,31 @@ class StyleManagerApp(TkinterDnD.Tk):
         self.preview_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="style-preview")
         self.closing = False
         self.settings_window = None
+        self.converter_engine_state = {
+            "office": {"word": None, "excel": None},
+            "wps": {"word": None, "excel": None},
+        }
+        self.converter_engine_checking = False
+        self.converter_engine_checked = False
+        self.converter_running = False
         self.output_mode = tk.StringVar(
             value="source" if self.output_dir.get() == "跟随源文件目录" else "folder"
         )
 
         self.export_source = tk.StringVar(value=saved_export_source or (self.document_files[0] if self.document_files else ""))
         self.import_source = tk.StringVar(value=self.config_data.get("import_source", ""))
+        self.converter_engine = tk.StringVar(value=self.config_data.get("converter_engine", "office"))
+        if self.converter_engine.get() not in {"office", "wps"}:
+            self.converter_engine.set("office")
+        self.converter_office_selected = tk.BooleanVar(value=self.converter_engine.get() == "office")
+        self.converter_wps_selected = tk.BooleanVar(value=self.converter_engine.get() == "wps")
+        self.converter_output_mode = tk.StringVar(value=self.config_data.get("converter_output_mode", "source"))
+        if self.converter_output_mode.get() not in {"source", "folder"}:
+            self.converter_output_mode.set("source")
+        self.converter_output_dir = tk.StringVar(value=self.config_data.get("converter_output_dir", ""))
+        self.converter_count_text = tk.StringVar(value="0 个待转换文件")
+        self.converter_engine_text = tk.StringVar(value="进入格式转换页后会自动检测本机可用的转换引擎。")
+        self.converter_result_text = tk.StringVar(value="尚未开始转换。")
         self.template_name = tk.StringVar(value=self.config_data.get("template_name", ""))
         self.conflict_mode = tk.StringVar(value=self.config_data.get("conflict_mode", "overwrite"))
         self.clean_unused = tk.BooleanVar(value=self.config_data.get("clean_unused", True))
@@ -179,6 +244,9 @@ class StyleManagerApp(TkinterDnD.Tk):
                 "import_targets": [],
                 "export_source": "",
                 "import_source": self.import_source.get(),
+                "converter_engine": self.converter_engine.get(),
+                "converter_output_mode": self.converter_output_mode.get(),
+                "converter_output_dir": self.converter_output_dir.get(),
                 "template_name": self.template_name.get(),
                 "conflict_mode": self.conflict_mode.get(),
                 "clean_unused": self.clean_unused.get(),
@@ -235,7 +303,7 @@ class StyleManagerApp(TkinterDnD.Tk):
         tb.Label(brand_text, text=f"桌面版  v{APP_VERSION}", style="SidebarText.TLabel").pack(anchor=W)
         tb.Label(sidebar, text="工作区", style="SidebarText.TLabel").pack(anchor=W, padx=10, pady=(0, 6))
         self.nav_buttons = []
-        for index, text in enumerate(("样式清理", "提取模板", "模板库")):
+        for index, text in enumerate(("样式清理", "提取模板", "格式转换", "模板库")):
             button = tb.Button(
                 sidebar,
                 text=text,
@@ -303,15 +371,18 @@ class StyleManagerApp(TkinterDnD.Tk):
         self.notebook.pack(fill=BOTH, expand=True)
         self.clean_tab = tb.Frame(self.notebook, padding=4, style="Content.TFrame")
         self.export_tab = tb.Frame(self.notebook, padding=4, style="Content.TFrame")
+        self.converter_tab = tb.Frame(self.notebook, padding=4, style="Content.TFrame")
         self.import_tab = tb.Frame(self.notebook, padding=4, style="Content.TFrame")
         self.library_tab = tb.Frame(self.notebook, padding=4, style="Content.TFrame")
         self.notebook.add(self.clean_tab, text="样式清理")
         self.notebook.add(self.export_tab, text="提取模板")
+        self.notebook.add(self.converter_tab, text="格式转换")
         self.notebook.add(self.library_tab, text="模板库")
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
         self._build_clean_tab()
         self._build_export_tab()
+        self._build_converter_tab()
         self._build_import_tab()
         self._build_library_tab()
 
@@ -327,6 +398,7 @@ class StyleManagerApp(TkinterDnD.Tk):
         titles = (
             ("样式清理", "检查并整理 Word/WPS 文档中的样式与编号"),
             ("提取模板", "从现有文档提取可重复使用的轻量 Word 模板"),
+            ("格式转换", "将旧版 Office 文件转换为更稳定的新格式"),
             ("模板库", "集中预览、管理和编辑已保存的模板"),
         )
         self.notebook.select(index)
@@ -455,6 +527,147 @@ class StyleManagerApp(TkinterDnD.Tk):
             show_details=False,
         )
         self.export_preview.pack(fill=BOTH, expand=True)
+
+    def _build_converter_tab(self):
+        intro = tb.Frame(self.converter_tab, padding=12, style="Card.TFrame")
+        intro.pack(fill=X, pady=(0, 8))
+        tb.Label(intro, text="批量格式转换", style="CardTitle.TLabel").pack(anchor=W)
+        tb.Label(
+            intro,
+            text=(
+                "将旧版 .doc / .xls 转换为 .docx / .xlsx，便于 agent 和其他工具稳定读取。"
+                "添加文件，确认转换引擎与输出位置，然后开始转换；源文件不会被覆盖。"
+            ),
+            wraplength=920,
+            justify=LEFT,
+            style="Muted.TLabel",
+        ).pack(anchor=W, pady=(4, 0))
+
+        paned = tb.Panedwindow(self.converter_tab, orient=HORIZONTAL)
+        paned.pack(fill=BOTH, expand=True)
+        left = tb.Frame(paned, padding=(0, 0, 10, 0), style="Content.TFrame")
+        right = tb.Frame(paned, width=360, style="Content.TFrame")
+        right.pack_propagate(False)
+        paned.add(left, weight=5)
+        paned.add(right, weight=2)
+
+        file_box = tb.Labelframe(left, text="待转换文件", padding=10, style="Card.TLabelframe")
+        file_box.pack(fill=BOTH, expand=True)
+        file_top = tb.Frame(file_box, style="Surface.TFrame")
+        file_top.pack(fill=X, pady=(0, 8))
+        tb.Label(file_top, text="支持 .doc 和 .xls；拖入文件或文件夹也会自动筛选。", style="Muted.TLabel").pack(side=LEFT)
+        tb.Label(file_top, textvariable=self.converter_count_text, style="Badge.TLabel").pack(side=RIGHT)
+
+        list_frame = tb.Frame(file_box, style="Surface.TFrame")
+        list_frame.pack(fill=BOTH, expand=True)
+        self.converter_tree = tb.Treeview(
+            list_frame,
+            columns=("name", "type", "folder"),
+            show=HEADINGS,
+            selectmode="extended",
+        )
+        for col, text, width, anchor in (
+            ("name", "文件名", 260, W),
+            ("type", "转换", 95, CENTER),
+            ("folder", "所在位置", 520, W),
+        ):
+            self.converter_tree.heading(col, text=text)
+            self.converter_tree.column(col, width=width, minwidth=80, stretch=col == "folder", anchor=anchor)
+        y_scroll = tb.Scrollbar(list_frame, orient=VERTICAL, command=self.converter_tree.yview)
+        x_scroll = tb.Scrollbar(list_frame, orient=HORIZONTAL, command=self.converter_tree.xview)
+        self.converter_tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        self.converter_tree.grid(row=0, column=0, sticky=NSEW)
+        y_scroll.grid(row=0, column=1, sticky=NS)
+        x_scroll.grid(row=1, column=0, sticky=EW)
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+
+        file_actions = tb.Frame(file_box, style="Surface.TFrame")
+        file_actions.pack(fill=X, pady=(8, 0))
+        tb.Button(file_actions, text="添加文件", style="Primary.TButton", command=self.pick_converter_files).pack(side=LEFT)
+        tb.Button(file_actions, text="添加文件夹", style="Secondary.TButton", command=self.pick_converter_folder).pack(side=LEFT, padx=6)
+        tb.Button(file_actions, text="移除选中", style="Secondary.TButton", command=self.remove_selected_converter_files).pack(side=RIGHT)
+        tb.Button(file_actions, text="清空列表", style="Danger.TButton", command=self.clear_converter_files).pack(side=RIGHT, padx=6)
+
+        engine_box = tb.Labelframe(right, text="转换引擎", padding=12, style="Card.TLabelframe")
+        engine_box.pack(fill=X)
+        self.converter_office_check = tb.Checkbutton(
+            engine_box,
+            text="使用 Microsoft Office",
+            variable=self.converter_office_selected,
+            command=lambda: self.select_converter_engine("office"),
+        )
+        self.converter_office_check.pack(anchor=W)
+        self.converter_wps_check = tb.Checkbutton(
+            engine_box,
+            text="使用 WPS",
+            variable=self.converter_wps_selected,
+            command=lambda: self.select_converter_engine("wps"),
+        )
+        self.converter_wps_check.pack(anchor=W, pady=(3, 0))
+        tb.Label(
+            engine_box,
+            textvariable=self.converter_engine_text,
+            wraplength=320,
+            justify=LEFT,
+            style="Muted.TLabel",
+        ).pack(fill=X, pady=(8, 0))
+        tb.Button(
+            engine_box,
+            text="重新检测",
+            style="Ghost.TButton",
+            command=lambda: self.ensure_converter_engine_check(force=True),
+        ).pack(anchor=E, pady=(6, 0))
+
+        output_box = tb.Labelframe(right, text="输出位置", padding=12, style="Card.TLabelframe")
+        output_box.pack(fill=X, pady=(8, 0))
+        tb.Radiobutton(
+            output_box,
+            text="输出到原文件同目录",
+            value="source",
+            variable=self.converter_output_mode,
+            command=self.save_config,
+        ).pack(anchor=W)
+        tb.Radiobutton(
+            output_box,
+            text="输出到指定文件夹",
+            value="folder",
+            variable=self.converter_output_mode,
+            command=self.save_config,
+        ).pack(anchor=W, pady=(3, 0))
+        output_row = tb.Frame(output_box, style="Surface.TFrame")
+        output_row.pack(fill=X, pady=(8, 0))
+        tb.Entry(output_row, textvariable=self.converter_output_dir).pack(side=LEFT, fill=X, expand=True)
+        tb.Button(output_row, text="选择", style="Secondary.TButton", command=self.pick_converter_output_dir).pack(side=RIGHT, padx=(6, 0))
+
+        action_box = tb.Labelframe(right, text="执行与结果", padding=12, style="Card.TLabelframe")
+        action_box.pack(fill=BOTH, expand=True, pady=(8, 0))
+        self.converter_start_button = tb.Button(
+            action_box,
+            text="开始转换",
+            style="Primary.TButton",
+            command=self.start_converter,
+        )
+        self.converter_start_button.pack(fill=X)
+        self.converter_open_button = tb.Button(
+            action_box,
+            text="打开结果位置",
+            style="Secondary.TButton",
+            command=self.open_converter_result_location,
+            state=DISABLED,
+        )
+        self.converter_open_button.pack(fill=X, pady=(6, 0))
+        tb.Label(
+            action_box,
+            textvariable=self.converter_result_text,
+            wraplength=320,
+            justify=LEFT,
+            style="Muted.TLabel",
+        ).pack(fill=X, pady=(8, 4))
+        self.converter_result_detail = tk.Text(action_box, height=9, wrap="word", relief="flat")
+        configure_text(self.converter_result_detail, COLORS["surface_alt"])
+        self.converter_result_detail.pack(fill=BOTH, expand=True)
+        self.converter_result_detail.configure(state=DISABLED)
 
     def _build_import_tab(self):
         paned = tb.Panedwindow(self.import_tab, orient=HORIZONTAL)
@@ -697,6 +910,7 @@ class StyleManagerApp(TkinterDnD.Tk):
     # list helpers
     def refresh_all_lists(self):
         self.refresh_shared_document_lists()
+        self.refresh_converter_file_list()
         self.refresh_templates()
 
     def refresh_file_list(self, widget, values):
@@ -785,11 +999,317 @@ class StyleManagerApp(TkinterDnD.Tk):
             self.preview_import_source()
             self.save_config()
 
+    # format conversion
+    def converter_kind_label(self, path):
+        suffix = Path(path).suffix.lower()
+        if suffix == ".doc":
+            return ".doc → .docx"
+        if suffix == ".xls":
+            return ".xls → .xlsx"
+        return ""
+
+    def refresh_converter_file_list(self):
+        self.converter_count_text.set(f"{len(self.converter_files)} 个待转换文件")
+        if not hasattr(self, "converter_tree"):
+            return
+        selected = {
+            self.converter_files[int(iid)]
+            for iid in self.converter_tree.selection()
+            if iid.isdigit() and int(iid) < len(self.converter_files)
+        }
+        self.converter_tree.delete(*self.converter_tree.get_children())
+        for index, path in enumerate(self.converter_files):
+            source = Path(path)
+            self.converter_tree.insert(
+                "",
+                END,
+                iid=str(index),
+                values=(source.name, self.converter_kind_label(path), str(source.parent)),
+            )
+        for index, path in enumerate(self.converter_files):
+            if path in selected:
+                self.converter_tree.selection_add(str(index))
+
+    def add_converter_paths(self, entries):
+        files, ignored = collect_converter_paths(entries)
+        previous_count = len(self.converter_files)
+        self.converter_files[:] = merge_converter_paths(self.converter_files, files)
+        added = len(self.converter_files) - previous_count
+        self.refresh_converter_file_list()
+        if added:
+            self.status.set(f"已添加 {added} 个待转换文件。")
+        if ignored:
+            messagebox.showinfo(
+                APP_NAME,
+                f"已忽略 {ignored} 个不支持的项目。\n\n这里只接收旧版 .doc 和 .xls 文件。",
+                parent=self,
+            )
+        if not added and not ignored:
+            messagebox.showinfo(APP_NAME, "没有找到可转换的 .doc 或 .xls 文件。", parent=self)
+
+    def pick_converter_files(self):
+        files = filedialog.askopenfilenames(filetypes=[("旧版 Office 文件", "*.doc *.xls")])
+        if files:
+            self.add_converter_paths(files)
+
+    def pick_converter_folder(self):
+        folder = filedialog.askdirectory(title="选择包含旧版 Office 文件的文件夹")
+        if folder:
+            self.add_converter_paths([folder])
+
+    def remove_selected_converter_files(self):
+        selection = self.converter_tree.selection() if hasattr(self, "converter_tree") else ()
+        if not selection:
+            messagebox.showinfo(APP_NAME, "请先在列表中选择要移除的文件。", parent=self)
+            return
+        indexes = sorted((int(iid) for iid in selection if iid.isdigit()), reverse=True)
+        for index in indexes:
+            if index < len(self.converter_files):
+                self.converter_files.pop(index)
+        self.refresh_converter_file_list()
+        self.status.set("已从待转换列表移除选中文件。")
+
+    def clear_converter_files(self):
+        self.converter_files.clear()
+        self.refresh_converter_file_list()
+        self.set_converter_result("尚未开始转换。", "")
+        self.converter_open_button.configure(state=DISABLED)
+        self.status.set("已清空格式转换列表。")
+
+    def pick_converter_output_dir(self):
+        folder = filedialog.askdirectory(title="选择转换输出目录")
+        if folder:
+            self.converter_output_dir.set(folder)
+            self.converter_output_mode.set("folder")
+            self.save_config()
+
+    def sync_converter_engine_checks(self):
+        engine = self.converter_engine.get()
+        self.converter_office_selected.set(engine == "office")
+        self.converter_wps_selected.set(engine == "wps")
+
+    def engine_any_available(self, engine):
+        state = self.converter_engine_state.get(engine, {})
+        return any(value is True for value in state.values())
+
+    def engine_required_missing(self, engine, required):
+        state = self.converter_engine_state.get(engine, {})
+        return [kind for kind in required if state.get(kind) is False]
+
+    def converter_required_kinds(self):
+        required = set()
+        for path in self.converter_files:
+            suffix = Path(path).suffix.lower()
+            if suffix == ".doc":
+                required.add("word")
+            elif suffix == ".xls":
+                required.add("excel")
+        return required
+
+    def select_converter_engine(self, engine, notify=True):
+        other = "wps" if engine == "office" else "office"
+        if self.converter_engine_checked and not self.engine_any_available(engine):
+            self.converter_engine.set(other if self.engine_any_available(other) else engine)
+            self.sync_converter_engine_checks()
+            if notify:
+                messagebox.showinfo(
+                    APP_NAME,
+                    f"未检测到 {converter.ENGINE_LABELS[engine]} 的转换组件。"
+                    + (
+                        f"\n\n可以改用 {converter.ENGINE_LABELS[other]}。"
+                        if self.engine_any_available(other)
+                        else "\n\n请先确认本机已安装 Microsoft Office 或 WPS。"
+                    ),
+                    parent=self,
+                )
+            self.save_config()
+            return
+        self.converter_engine.set(engine)
+        self.sync_converter_engine_checks()
+        self.save_config()
+
+    def ensure_converter_engine_check(self, force=False):
+        if self.converter_engine_checking:
+            return
+        if self.converter_engine_checked and not force:
+            return
+        self.converter_engine_checking = True
+        self.converter_engine_text.set("正在检测 Microsoft Office 和 WPS，请稍候...")
+        self.status.set("正在检测格式转换引擎...")
+
+        def worker():
+            result = {
+                "office": {"word": False, "excel": False},
+                "wps": {"word": False, "excel": False},
+            }
+            if not converter._HAS_WIN32COM:
+                return result
+            if converter.pythoncom:
+                converter.pythoncom.CoInitialize()
+            try:
+                for engine in ("office", "wps"):
+                    for kind in ("word", "excel"):
+                        result[engine][kind] = converter._probe_engine_available(engine, kind)
+            finally:
+                if converter.pythoncom:
+                    converter.pythoncom.CoUninitialize()
+            return result
+
+        def runner():
+            try:
+                result = worker()
+                self.after(0, lambda: self.finish_converter_engine_check(result))
+            except Exception as exc:
+                self.after(0, lambda: self.finish_converter_engine_check(None, str(exc)))
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def finish_converter_engine_check(self, result, error=None):
+        self.converter_engine_checking = False
+        self.converter_engine_checked = True
+        if result:
+            self.converter_engine_state = result
+        if error:
+            self.converter_engine_text.set(f"引擎检测未完成：{error}")
+            self.status.set("格式转换引擎检测失败。")
+            return
+        self.converter_engine_text.set(self.converter_engine_summary())
+        if not self.engine_any_available("office") and self.engine_any_available("wps"):
+            self.converter_engine.set("wps")
+            self.sync_converter_engine_checks()
+        elif not self.engine_any_available("office") and not self.engine_any_available("wps"):
+            self.converter_engine.set("office")
+            self.sync_converter_engine_checks()
+        self.status.set("格式转换引擎检测完成。")
+        self.save_config()
+
+    def converter_engine_summary(self):
+        def label(engine):
+            state = self.converter_engine_state[engine]
+            word = "Word 可用" if state["word"] else "Word 未检测到"
+            excel = "Excel 可用" if state["excel"] else "Excel 未检测到"
+            return f"{converter.ENGINE_LABELS[engine]}：{word}，{excel}"
+        if not converter._HAS_WIN32COM:
+            return "当前环境缺少 pywin32，暂时无法调用 Office 或 WPS。"
+        return f"{label('office')}\n{label('wps')}"
+
+    def validate_converter_engine_for_current_files(self):
+        if not self.converter_engine_checked:
+            self.ensure_converter_engine_check()
+            messagebox.showinfo(APP_NAME, "正在检测本机可用的转换引擎，请稍后再开始转换。", parent=self)
+            return False
+        required = self.converter_required_kinds()
+        engine = self.converter_engine.get()
+        missing = self.engine_required_missing(engine, required)
+        if not missing:
+            return True
+        other = "wps" if engine == "office" else "office"
+        other_missing = self.engine_required_missing(other, required)
+        missing_labels = "、".join(converter.KIND_LABELS[item] for item in missing)
+        if self.engine_any_available(other) and not other_missing:
+            self.converter_engine.set(other)
+            self.sync_converter_engine_checks()
+            self.save_config()
+            messagebox.showinfo(
+                APP_NAME,
+                f"未检测到 {converter.ENGINE_LABELS[engine]} 的 {missing_labels} 转换组件。\n\n"
+                f"已为你切换到 {converter.ENGINE_LABELS[other]}，请再次点击“开始转换”。",
+                parent=self,
+            )
+        else:
+            messagebox.showerror(
+                APP_NAME,
+                f"未检测到可处理当前文件的转换组件：{missing_labels}。\n\n"
+                "请确认 Microsoft Office 或 WPS 已安装，并关闭可能占用文件的窗口后再试。",
+                parent=self,
+            )
+        return False
+
+    def converter_output_folder(self):
+        if self.converter_output_mode.get() != "folder":
+            return None
+        folder = self.converter_output_dir.get().strip()
+        if not folder:
+            messagebox.showinfo(APP_NAME, "请先选择输出文件夹，或改为输出到原文件同目录。", parent=self)
+            return False
+        try:
+            Path(folder).mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"输出文件夹无法使用：\n{exc}", parent=self)
+            return False
+        return folder
+
+    def set_converter_result(self, summary, detail):
+        self.converter_result_text.set(summary)
+        if hasattr(self, "converter_result_detail"):
+            self.converter_result_detail.configure(state=NORMAL)
+            self.converter_result_detail.delete("1.0", END)
+            self.converter_result_detail.insert("1.0", detail or "暂无详细结果。")
+            self.converter_result_detail.configure(state=DISABLED)
+
+    def start_converter(self):
+        if self.converter_running:
+            return
+        if not self.converter_files:
+            messagebox.showinfo(APP_NAME, "请先添加要转换的 .doc 或 .xls 文件。", parent=self)
+            return
+        if not self.validate_converter_engine_for_current_files():
+            return
+        output_dir = self.converter_output_folder()
+        if output_dir is False:
+            return
+
+        files = list(self.converter_files)
+        engine = self.converter_engine.get()
+        self.converter_running = True
+        self.converter_start_button.configure(state=DISABLED)
+        self.converter_open_button.configure(state=DISABLED)
+        self.set_converter_result("正在转换，请稍候...", "")
+
+        def work():
+            try:
+                return {"ok": True, "result": converter.convert_files(files, output_dir=output_dir, engine=engine)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        self.run_task(work, self.finish_converter)
+
+    def finish_converter(self, payload):
+        self.converter_running = False
+        self.converter_start_button.configure(state=NORMAL)
+        if not payload.get("ok"):
+            self.set_converter_result("转换未完成。", payload.get("error", "未知错误"))
+            messagebox.showerror(APP_NAME, f"转换未完成：\n{payload.get('error', '未知错误')}", parent=self)
+            return
+        result = payload["result"]
+        converted = result.get("converted", [])
+        failed = result.get("failed", [])
+        outputs = [item.get("output") for item in converted if item.get("output")]
+        self.result_paths = outputs
+        if outputs:
+            self.converter_open_button.configure(state=NORMAL)
+        summary = f"转换完成：成功 {len(converted)} 个，失败 {len(failed)} 个。"
+        details = []
+        if converted:
+            details.append("成功：")
+            details.extend(f"- {Path(item['source']).name} → {item['output']}" for item in converted)
+        if failed:
+            details.append("\n失败：")
+            details.extend(f"- {Path(item.get('source', '')).name}: {item.get('error', '未知错误')}" for item in failed)
+        self.set_converter_result(summary, "\n".join(details))
+        self.status.set(summary)
+        FinishDialog(self, "格式转换完成", summary, outputs)
+
+    def open_converter_result_location(self):
+        if self.result_paths:
+            open_folder(self.result_paths[0], select_file=True)
+
     def on_tab_changed(self, _event=None):
         tab = self.notebook.index(self.notebook.select())
         titles = (
             ("样式清理", "检查并整理 Word/WPS 文档中的样式与编号"),
             ("提取模板", "从现有文档提取可重复使用的轻量 Word 模板"),
+            ("格式转换", "将旧版 Office 文件转换为更稳定的新格式"),
             ("模板库", "集中预览、管理和编辑已保存的模板"),
         )
         self.page_title.set(titles[tab][0])
@@ -797,14 +1317,16 @@ class StyleManagerApp(TkinterDnD.Tk):
         for button_index, button in enumerate(self.nav_buttons):
             button.configure(style="NavActive.TButton" if button_index == tab else "Nav.TButton")
         if hasattr(self, "documents_panel"):
-            if tab == 2:
+            if tab in {2, 3}:
                 self.documents_panel.pack_forget()
             elif not self.documents_panel.winfo_manager():
                 self.documents_panel.pack(fill=X, pady=(10, 8), before=self.notebook)
         self.refresh_shared_document_lists()
-        if self.notebook.index(self.notebook.select()) == 2:
+        if tab == 2:
+            self.ensure_converter_engine_check()
+        if tab == 3:
             self.refresh_templates()
-        if hasattr(self, "import_target_preview"):
+        if tab in {0, 1} and hasattr(self, "import_target_preview"):
             self.on_document_select()
         self.save_config()
 
@@ -1266,10 +1788,15 @@ class StyleManagerApp(TkinterDnD.Tk):
 
     # drag/drop
     def on_drop(self, event):
-        files = [f for f in self.tk.splitlist(event.data) if f.lower().endswith((".doc", ".docx", ".dotx"))]
+        tab = self.notebook.index(self.notebook.select())
+        dropped = list(self.tk.splitlist(event.data))
+        if tab == 2:
+            self.add_converter_paths(dropped)
+            self.save_config()
+            return
+        files = [f for f in dropped if f.lower().endswith((".doc", ".docx", ".dotx"))]
         if not files:
             return
-        tab = self.notebook.index(self.notebook.select())
         if tab == 0:
             self.add_shared_documents(files, preferred_source=files[0])
         elif tab == 1:
